@@ -59,13 +59,14 @@ header p {
     grid-template-columns: 1fr 1fr;
     grid-template-areas:
         "user-panel ai-assistant"
-        "transactions transactions";
+        "transactions active-users";
     gap: 1.5rem;
 }
 
 #user-panel { grid-area: user-panel; }
 #ai-assistant-panel { grid-area: ai-assistant; }
 #transactions-panel { grid-area: transactions; }
+#active-users-panel { grid-area: active-users; }
 
 .card {
     background-color: var(--card-background);
@@ -249,6 +250,37 @@ button i {
 .transaction-time { font-size: 0.8rem; color: var(--text-muted-color); }
 .transaction-amount { font-size: 1.1rem; font-weight: 700; color: var(--success-color); }
 
+/* Active Users Panel */
+#active-users-list {
+    list-style: none;
+    max-height: 200px;
+    overflow-y: auto;
+    padding-right: 10px;
+}
+.active-user-item {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    background-color: var(--secondary-color);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+}
+.active-user-item.empty {
+    color: var(--text-muted-color);
+    justify-content: center;
+}
+.active-user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    margin-right: 10px;
+    border: 2px solid var(--primary-color);
+}
+.active-user-name {
+    color: var(--text-color);
+}
+
 footer {
     text-align: center;
     margin-top: 2rem;
@@ -293,13 +325,68 @@ footer {
     100% { transform: rotate(360deg); }
 }
 
+/* PIN Modal */
+#pin-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+    transition: opacity 0.3s;
+}
+#pin-modal-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+#pin-modal {
+    background: var(--card-background);
+    padding: 2rem;
+    border-radius: 12px;
+    text-align: center;
+    border: 1px solid var(--primary-color);
+    width: 90%;
+    max-width: 350px;
+}
+#pin-modal h2 {
+    color: var(--primary-color);
+    margin-bottom: 1rem;
+}
+#pin-modal p {
+    color: var(--text-muted-color);
+    margin-bottom: 1.5rem;
+}
+#pin-input {
+    width: 100%;
+    padding: 1rem;
+    font-size: 2rem;
+    text-align: center;
+    letter-spacing: 1rem;
+    background-color: var(--background-color);
+    border: 1px solid var(--secondary-color);
+    color: var(--text-color);
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    font-family: var(--font-mono);
+}
+#pin-error {
+    color: var(--error-color);
+    height: 1.2em;
+    margin-top: -1rem;
+    margin-bottom: 1rem;
+}
+
 @media (max-width: 900px) {
     .grid-container {
         grid-template-columns: 1fr;
         grid-template-areas:
             "user-panel"
             "ai-assistant"
-            "transactions";
+            "transactions"
+            "active-users";
     }
 }
-

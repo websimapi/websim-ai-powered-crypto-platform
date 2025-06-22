@@ -6,6 +6,20 @@
     <title>AI-Powered Crypto Platform</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script>
+      // IMPORTANT: This import map is required for the WebsimSocket library.
+      // Do not remove it.
+      const websimScript = document.createElement('script');
+      websimScript.type = 'importmap';
+      websimScript.textContent = JSON.stringify({
+        imports: {
+          'websim': '/websim.js',
+          'react': 'https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js',
+          'react-dom/client': 'https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js'
+        }
+      });
+      document.head.appendChild(websimScript);
+    </script>
 </head>
 <body>
     <div id="app-container">
@@ -69,6 +83,14 @@
                        <li class="transaction-item empty">No transactions yet.</li>
                     </ul>
                 </div>
+                
+                <!-- Active Users -->
+                <div class="card" id="active-users-panel">
+                    <h2><i class="fas fa-users"></i> Active Users</h2>
+                    <ul id="active-users-list">
+                        <li class="active-user-item empty">Connecting to network...</li>
+                    </ul>
+                </div>
             </div>
         </main>
 
@@ -80,8 +102,21 @@
         <div class="spinner"></div>
         <p id="loading-text">Processing...</p>
     </div>
-    <script src="script.js"></script>
+
+    <!-- PIN Modal -->
+    <div id="pin-modal-overlay" class="hidden">
+        <div id="pin-modal">
+            <h2 id="pin-modal-title">Setup Your Secure PIN</h2>
+            <p id="pin-modal-prompt">Create a 4-digit PIN to secure your account. This PIN is not recoverable.</p>
+            <form id="pin-form">
+                <input type="password" id="pin-input" maxlength="4" pattern="[0-9]{4}" required autocomplete="off" inputmode="numeric">
+                <button type="submit" id="pin-submit-button">Set PIN</button>
+            </form>
+            <p id="pin-error"></p>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+    <script src="script.js" type="module"></script>
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-
