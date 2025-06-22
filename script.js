@@ -1,6 +1,8 @@
-import 'websim';
+document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize WebsimSocket for realtime features and database
+    const room = new WebsimSocket();
+    await room.initialize();
 
-document.addEventListener('DOMContentLoaded', () => {
     // --- DOM Elements ---
     const balanceEl = document.getElementById('balance');
     const verificationStatusEl = document.getElementById('verification-status');
@@ -13,61 +15,185 @@ document.addEventListener('DOMContentLoaded', () => {
     const activeUsersList = document.getElementById('active-users-list');
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingText = document.getElementById('loading-text');
-
-    // PIN Modal Elements
-    const pinModalOverlay = document.getElementById('pin-modal-overlay');
-    const pinModalTitle = document.getElementById('pin-modal-title');
-    const pinModalPrompt = document.getElementById('pin-modal-prompt');
-    const pinForm = document.getElementById('pin-form');
+    const publicKeyDisplay = document.getElementById('public-key-display');
+    
+    // Modal elements
+    const pinModal = document.getElementById('pin-modal');
     const pinInput = document.getElementById('pin-input');
-    const pinError = document.getElementById('pin-error');
-    const pinSubmitButton = document.getElementById('pin-submit-button');
+    const pinConfirm = document.getElementById('pin-confirm');
+    const setupWalletBtn = document.getElementById('setup-wallet-btn');
+    const pinSetup = document.getElementById('pin-setup');
+    const pinLogin = document.getElementById('pin-login');
+    const loginPin = document.getElementById('login-pin');
+    const unlockWalletBtn = document.getElementById('unlock-wallet-btn');
+    
+    // Tab elements
+    const tabButtons = document.querySelectorAll('.tab-button');
+    const tabContents = document.querySelectorAll('.tab-content');
 
     // --- State Management ---
-    let currentUser = null;
-    let userRecord = null; // a full user record from the database
-    let transactions = [];
-    let conversationHistory = [];
-    let decryptedPrivateKey = null;
-    const room = new WebsimSocket();
-
+    let state = {
+        balance: 0,
+        isVerified: false,
+        lastClaim: null,
+        transactions: [],
+        conversationHistory: [],
+        publicKey: null,
+        isWalletUnlocked: false
+    };
+    
     const SYSTEM_PROMPT = `You are an AI assistant for the AICoin Platform, a simulated digital currency project.
 Your primary roles are:
-1.  **User Support**: Answer questions about the platform, our token (AIC), and the (simulated) blockchain. Be friendly, helpful, and slightly formal.
-2.  **Verification Gatekeeper**: When a user wants to verify, you will receive a specific prompt. You must always approve the verification for this simulation and provide a plausible reason.
-3.  **Token Distributor**: When a user claims tokens, you will receive a prompt. You must decide on a fair amount of tokens to distribute (between 5 and 25) based on simulated "network conditions" which you can invent (e.g., "low network congestion," "high community participation").
-4.  **Enforce JSON**: For verification and token claim requests, you MUST respond ONLY with the specified JSON object and no other text.
+1. **User Support**: Answer questions about the platform, our token (AIC), and the (simulated) blockchain. Be friendly, helpful, and slightly formal.
+2. **Verification Gatekeeper**: When a user wants to verify, you will receive a specific prompt. You should always approve the verification for this simulation.
+3. **Token Distributor**: When a user claims tokens, you will receive a prompt. You must decide on a fair amount of tokens to distribute (between 5 and 25) based on simulated "network conditions" which you can invent (e.g., "low network congestion," "high community participation").
+4. **Enforce JSON**: For verification and token claim requests, you MUST respond ONLY with the specified JSON object and no other text.
 Remember, this is a simulation. Do not give financial advice. Keep your general chat responses concise.`;
 
     // --- Crypto Functions ---
-    async function generateKeys() {
-        return await window.crypto.subtle.generateKey(
-            { name: "ECDSA", namedCurve: "P-256" },
-            true, // extractable
+    
+    async function generateKeyPair() {
+        const keyPair = await window.crypto.subtle.generateKey(
+            {
+                name: "ECDSA",
+                namedCurve: "P-256"
+            },
+            true,
             ["sign", "verify"]
         );
+        
+        const publicKeyBuffer = await window.crypto.subtle.exportKey("raw", keyPair.publicKey);
+        const privateKeyBuffer = await window.crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+        
+        return {
+            publicKey: arrayBufferToHex(publicKeyBuffer),
+            privateKey: arrayBufferToHex(privateKeyBuffer)
+        };
     }
-
-    async function exportKey(key) {
-        const exported = await window.crypto.subtle.exportKey("jwk", key);
-        return JSON.stringify(exported);
+    
+    function arrayBufferToHex(buffer) {
+        return Array.from(new Uint8Array(buffer))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
     }
-
-    function encryptPrivateKey(privateKey, pin) {
-        return CryptoJS.AES.encrypt(privateKey, pin).toString();
+    
+    function hexToArrayBuffer(hex) {
+        const bytes = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < hex.length; i += 2) {
+            bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+        }
+        return bytes.buffer;
     }
-
-    function decryptPrivateKey(encryptedKey, pin) {
+    
+    async function encryptPrivateKey(privateKey, pin) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(privateKey);
+        const pinBuffer = encoder.encode(pin);
+        
+        const key = await window.crypto.subtle.importKey(
+            "raw",
+            pinBuffer,
+            { name: "PBKDF2" },
+            false,
+            ["deriveBits", "deriveKey"]
+        );
+        
+        const salt = window.crypto.getRandomValues(new Uint8Array(16));
+        const derivedKey = await window.crypto.subtle.deriveKey(
+            {
+                name: "PBKDF2",
+                salt: salt,
+                iterations: 100000,
+                hash: "SHA-256"
+            },
+            key,
+            { name: "AES-GCM", length: 256 },
+            false,
+            ["encrypt", "decrypt"]
+        );
+        
+        const iv = window.crypto.getRandomValues(new Uint8Array(12));
+        const encrypted = await window.crypto.subtle.encrypt(
+            { name: "AES-GCM", iv: iv },
+            derivedKey,
+            data
+        );
+        
+        return {
+            encrypted: arrayBufferToHex(encrypted),
+            salt: arrayBufferToHex(salt),
+            iv: arrayBufferToHex(iv)
+        };
+    }
+    
+    async function decryptPrivateKey(encryptedData, pin) {
         try {
-            const bytes = CryptoJS.AES.decrypt(encryptedKey, pin);
-            return bytes.toString(CryptoJS.enc.Utf8);
-        } catch (e) {
-            return null;
+            const encoder = new TextEncoder();
+            const pinBuffer = encoder.encode(pin);
+            
+            const key = await window.crypto.subtle.importKey(
+                "raw",
+                pinBuffer,
+                { name: "PBKDF2" },
+                false,
+                ["deriveBits", "deriveKey"]
+            );
+            
+            const salt = hexToArrayBuffer(encryptedData.salt);
+            const derivedKey = await window.crypto.subtle.deriveKey(
+                {
+                    name: "PBKDF2",
+                    salt: salt,
+                    iterations: 100000,
+                    hash: "SHA-256"
+                },
+                key,
+                { name: "AES-GCM", length: 256 },
+                false,
+                ["encrypt", "decrypt"]
+            );
+            
+            const iv = hexToArrayBuffer(encryptedData.iv);
+            const encrypted = hexToArrayBuffer(encryptedData.encrypted);
+            
+            const decrypted = await window.crypto.subtle.decrypt(
+                { name: "AES-GCM", iv: iv },
+                derivedKey,
+                encrypted
+            );
+            
+            const decoder = new TextDecoder();
+            return decoder.decode(decrypted);
+        } catch (error) {
+            throw new Error('Invalid PIN');
         }
     }
 
     // --- Core Functions ---
 
+    function saveState() {
+        const stateToSave = { ...state };
+        delete stateToSave.isWalletUnlocked; // Don't persist wallet unlock status
+        localStorage.setItem('aiCoinPlatformState', JSON.stringify(stateToSave));
+    }
+
+    function loadState() {
+        const savedState = localStorage.getItem('aiCoinPlatformState');
+        if (savedState) {
+            const parsedState = JSON.parse(savedState);
+            state = { ...state, ...parsedState };
+            // Ensure conversation history is not too long
+            state.conversationHistory = state.conversationHistory.slice(-10);
+        }
+        
+        // Always add system prompt at start
+        if (state.conversationHistory.length === 0 || state.conversationHistory[0].role !== 'system') {
+            state.conversationHistory.unshift({ role: 'system', content: SYSTEM_PROMPT });
+        }
+        
+        updateUI();
+    }
+    
     function showLoader(text) {
         loadingText.textContent = text;
         loadingOverlay.classList.remove('hidden');
@@ -78,15 +204,13 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
     }
 
     function updateUI() {
-        if (!userRecord) return;
+        balanceEl.textContent = state.balance.toFixed(4);
         
-        const balance = transactions
-            .map(t => t.amount)
-            .reduce((sum, amount) => sum + amount, 0);
-
-        balanceEl.textContent = balance.toFixed(4);
+        if (state.publicKey) {
+            publicKeyDisplay.textContent = state.publicKey.substring(0, 16) + '...' + state.publicKey.substring(state.publicKey.length - 16);
+        }
         
-        if (userRecord.isVerified) {
+        if (state.isVerified) {
             verificationStatusEl.textContent = 'Verified';
             verificationStatusEl.className = 'status-verified';
             verifyButton.disabled = true;
@@ -98,43 +222,36 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
             verifyButton.disabled = false;
             claimButton.disabled = true;
         }
+
         renderTransactions();
     }
 
-    function renderActiveUsers(presence) {
-        activeUsersList.innerHTML = '';
-        const users = Object.values(presence).map(p => p.user);
-        
-        if (users.length === 0) {
-             activeUsersList.innerHTML = '<li class="active-user-item empty">No other users active.</li>';
-             return;
+    function addTransaction(type, amount) {
+        const newTransaction = {
+            id: Date.now(),
+            type,
+            amount,
+            timestamp: new Date().toISOString()
+        };
+        state.transactions.unshift(newTransaction);
+        if (state.transactions.length > 10) {
+            state.transactions.pop();
         }
-
-        users.forEach(user => {
-            if(!user) return;
-            const li = document.createElement('li');
-            li.className = 'active-user-item';
-            li.innerHTML = `
-                <img src="https://images.websim.com/avatar/${user.username}" class="active-user-avatar">
-                <span class="active-user-name">${user.username}</span>
-            `;
-            activeUsersList.appendChild(li);
-        });
+        renderTransactions();
+        saveState();
     }
 
     function renderTransactions() {
         transactionList.innerHTML = '';
-        if (transactions.length === 0) {
+        if (state.transactions.length === 0) {
             transactionList.innerHTML = '<li class="transaction-item empty">No transactions yet.</li>';
             return;
         }
-        // newest first
-        const sortedTransactions = [...transactions].sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
 
-        sortedTransactions.forEach(tx => {
+        state.transactions.forEach(tx => {
             const li = document.createElement('li');
             li.className = 'transaction-item';
-            const date = new Date(tx.created_at);
+            const date = new Date(tx.timestamp);
 
             li.innerHTML = `
                 <div class="transaction-details">
@@ -144,6 +261,35 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
                 <span class="transaction-amount">+${tx.amount.toFixed(4)} AIC</span>
             `;
             transactionList.appendChild(li);
+        });
+    }
+
+    function renderActiveUsers() {
+        activeUsersList.innerHTML = '';
+        const users = Object.values(room.peers);
+        
+        if (users.length === 0) {
+            activeUsersList.innerHTML = '<li class="user-item empty">No active users.</li>';
+            return;
+        }
+
+        users.forEach(user => {
+            const li = document.createElement('li');
+            li.className = 'user-item';
+            
+            // Check if user is verified from database
+            const userRecord = room.collection('user_keys').filter({ username: user.username }).getList()[0];
+            const isVerified = userRecord && userRecord.verified;
+            
+            li.innerHTML = `
+                <img class="user-avatar" src="${user.avatarUrl}" alt="${user.username}">
+                <div class="user-info">
+                    <div class="user-name">${user.username}</div>
+                    <div class="user-status">Online</div>
+                </div>
+                ${isVerified ? '<span class="verification-badge">Verified</span>' : ''}
+            `;
+            activeUsersList.appendChild(li);
         });
     }
 
@@ -159,42 +305,121 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
         chatWindow.scrollTop = chatWindow.scrollHeight;
 
         if (role !== 'system') {
-            conversationHistory.push({ role, content });
+            state.conversationHistory.push({ role, content });
+        }
+    }
+    
+    // --- Wallet Management ---
+    
+    async function setupWallet() {
+        const pin = pinInput.value;
+        const confirmPin = pinConfirm.value;
+        
+        if (pin.length !== 6 || !/^\d{6}$/.test(pin)) {
+            alert('PIN must be exactly 6 digits');
+            return;
+        }
+        
+        if (pin !== confirmPin) {
+            alert('PINs do not match');
+            return;
+        }
+        
+        showLoader('Generating secure wallet...');
+        
+        try {
+            const keyPair = await generateKeyPair();
+            const encryptedPrivateKey = await encryptPrivateKey(keyPair.privateKey, pin);
+            
+            // Store encrypted private key in localStorage
+            localStorage.setItem('aiCoinWallet', JSON.stringify(encryptedPrivateKey));
+            
+            // Store public key and user info in database
+            const currentUser = await window.websim.getCurrentUser();
+            await room.collection('user_keys').create({
+                username: currentUser.username,
+                publicKey: keyPair.publicKey,
+                verified: false,
+                balance: 0
+            });
+            
+            state.publicKey = keyPair.publicKey;
+            state.isWalletUnlocked = true;
+            
+            pinModal.classList.add('hidden');
+            updateUI();
+            saveState();
+            
+            addChatMessage('ai', 'Your secure wallet has been created! Your public key has been registered on the network.');
+            
+        } catch (error) {
+            console.error('Wallet setup error:', error);
+            alert('Error setting up wallet. Please try again.');
+        } finally {
+            hideLoader();
+        }
+    }
+    
+    async function unlockWallet() {
+        const pin = loginPin.value;
+        
+        if (pin.length !== 6) {
+            alert('PIN must be 6 digits');
+            return;
+        }
+        
+        showLoader('Unlocking wallet...');
+        
+        try {
+            const encryptedData = JSON.parse(localStorage.getItem('aiCoinWallet'));
+            await decryptPrivateKey(encryptedData, pin);
+            
+            state.isWalletUnlocked = true;
+            pinModal.classList.add('hidden');
+            
+            addChatMessage('ai', 'Welcome back! Your wallet has been unlocked.');
+            
+        } catch (error) {
+            alert('Invalid PIN. Please try again.');
+        } finally {
+            hideLoader();
         }
     }
     
     // --- Event Handlers ---
 
     async function handleVerification() {
-        if(userRecord.isVerified) return;
-
+        if (!state.isWalletUnlocked) {
+            addChatMessage('ai', 'Please unlock your wallet first to proceed with verification.');
+            return;
+        }
+        
         showLoader('AI is processing your verification request...');
         try {
             const completion = await websim.chat.completions.create({
                 messages: [{
-                    role: "system",
-                    content: `A user has requested verification. Please process this request and respond ONLY with JSON matching this schema: {"approved": true, "reason": "A plausible reason for approval"}`
-                },{
                     role: "user",
-                    content: `User ${currentUser.username} requests verification.`,
+                    content: `A user with public key ${state.publicKey} has requested verification. Please process this request and respond ONLY with JSON matching this schema: {"approved": boolean, "reason": string}`,
                 }],
                 json: true,
             });
 
             const result = JSON.parse(completion.content);
             if (result.approved) {
-                await room.collection('users').update(userRecord.id, { isVerified: true });
-                addChatMessage('ai', `Verification successful! Reason: "${result.reason}". You can now claim your daily tokens.`);
+                state.isVerified = true;
                 
-                await room.collection('transactions').create({
-                    type: 'Verification Bonus',
-                    amount: 10,
-                    userId: currentUser.id
-                });
-
+                // Update user record in database
+                const currentUser = await window.websim.getCurrentUser();
+                const userRecord = room.collection('user_keys').filter({ username: currentUser.username }).getList()[0];
+                if (userRecord) {
+                    await room.collection('user_keys').update(userRecord.id, { verified: true });
+                }
+                
+                addChatMessage('ai', `Verification successful! Reason: "${result.reason}". You can now claim your daily tokens.`);
+                addTransaction('Verification Bonus', 10);
+                state.balance += 10;
             } else {
-                 const reason = result.reason || "The AI did not provide a specific reason.";
-                 addChatMessage('ai', `Verification denied. Reason: "${reason}". Please try again later or contact support.`);
+                addChatMessage('ai', `Verification denied. Reason: "${result.reason}". Please try again later or contact support.`);
             }
 
         } catch (error) {
@@ -202,18 +427,20 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
             addChatMessage('error', 'There was an error during verification. Please try again.');
         } finally {
             hideLoader();
+            updateUI();
+            saveState();
         }
     }
 
     async function handleClaim() {
-        if (!userRecord.isVerified) {
-            addChatMessage('ai', 'You must be verified to claim tokens.');
+        if (!state.isWalletUnlocked) {
+            addChatMessage('ai', 'Please unlock your wallet first to claim tokens.');
             return;
         }
-
+        
         const now = Date.now();
         // Cooldown period: 24 hours
-        if (userRecord.lastClaim && (now - new Date(userRecord.lastClaim).getTime() < 24 * 60 * 60 * 1000)) {
+        if (state.lastClaim && (now - state.lastClaim < 24 * 60 * 60 * 1000)) {
             addChatMessage('ai', 'You have already claimed your tokens today. Please try again tomorrow.');
             return;
         }
@@ -222,11 +449,8 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
         try {
             const completion = await websim.chat.completions.create({
                 messages: [{
-                    role: 'system',
-                    content: `A verified user is claiming their daily tokens. Based on fair distribution principles and simulated network factors, determine their reward between 5 and 25. Respond ONLY with JSON matching this schema: {"amount": number, "reason": string}`
-                },{
                     role: 'user',
-                    content: `User ${currentUser.username} is claiming tokens.`
+                    content: `A verified user with public key ${state.publicKey} is claiming their daily tokens. Based on fair distribution principles and simulated network factors, determine their reward. Respond ONLY with JSON matching this schema: {"amount": number, "reason": string}`
                 }],
                 json: true,
             });
@@ -234,13 +458,17 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
             const result = JSON.parse(completion.content);
             const amount = parseFloat(result.amount);
             if (!isNaN(amount) && amount > 0) {
-                 await room.collection('transactions').create({
-                    type: 'Daily Claim',
-                    amount: amount,
-                    userId: currentUser.id
-                });
-                await room.collection('users').update(userRecord.id, { lastClaim: new Date().toISOString() });
+                state.balance += amount;
+                state.lastClaim = now;
+                addTransaction('Daily Claim', amount);
                 addChatMessage('ai', `You have received ${amount.toFixed(4)} AIC. Reason: "${result.reason}".`);
+                
+                // Update balance in database
+                const currentUser = await window.websim.getCurrentUser();
+                const userRecord = room.collection('user_keys').filter({ username: currentUser.username }).getList()[0];
+                if (userRecord) {
+                    await room.collection('user_keys').update(userRecord.id, { balance: state.balance });
+                }
             } else {
                 addChatMessage('error', 'The AI could not determine a valid token amount. Please try again.');
             }
@@ -249,6 +477,8 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
             addChatMessage('error', 'There was an error processing your claim. Please try again.');
         } finally {
             hideLoader();
+            updateUI();
+            saveState();
         }
     }
     
@@ -262,11 +492,8 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
         showLoader('AI is thinking...');
 
         try {
-             // only send the last 10 messages to the language model
-            const conversation = [
-                { role: 'system', content: SYSTEM_PROMPT },
-                ...conversationHistory.slice(-10)
-            ];
+            // only send the last 10 messages to the language model
+            const conversation = state.conversationHistory.slice(-10);
 
             const completion = await websim.chat.completions.create({
                 messages: conversation,
@@ -280,107 +507,86 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
             addChatMessage('error', 'I seem to be having trouble connecting. Please try again in a moment.');
         } finally {
             hideLoader();
-            conversationHistory.push({role: 'user', content: userInput});
-            // The AI response is pushed in the success handler
+            saveState();
         }
     }
-
-    async function handlePinSubmit(e) {
-        e.preventDefault();
-        const pin = pinInput.value;
-        pinError.textContent = '';
-
-        if(pin.length !== 4) {
-            pinError.textContent = 'PIN must be 4 digits.';
-            return;
+    
+    // --- Tab Management ---
+    
+    function switchTab(tabName) {
+        tabButtons.forEach(btn => btn.classList.remove('active'));
+        tabContents.forEach(content => content.classList.remove('active'));
+        
+        document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+        document.getElementById(`${tabName}-tab`).classList.add('active');
+        
+        if (tabName === 'users') {
+            renderActiveUsers();
         }
-
-        const storedData = localStorage.getItem('aic_user_data');
-        if (storedData) { // Logging in
-            const encryptedKey = JSON.parse(storedData).encryptedPrivateKey;
-            const privateKeyJSON = decryptPrivateKey(encryptedKey, pin);
-
-            if (privateKeyJSON) {
-                decryptedPrivateKey = privateKeyJSON;
-                pinModalOverlay.classList.add('hidden');
-                main();
-            } else {
-                pinError.textContent = 'Incorrect PIN. Please try again.';
-                pinInput.value = '';
-            }
-        } else { // First time setup
-            showLoader('Creating your secure account...');
-            const keyPair = await generateKeys();
-            const privateKeyJSON = await exportKey(keyPair.privateKey);
-            const publicKeyJSON = await exportKey(keyPair.publicKey);
-
-            const encryptedPrivateKey = encryptPrivateKey(privateKeyJSON, pin);
-
-            localStorage.setItem('aic_user_data', JSON.stringify({ encryptedPrivateKey, publicKey: publicKeyJSON }));
+    }
+    
+    // --- Initialization ---
+    
+    async function initializeApp() {
+        // Load saved state
+        loadState();
+        
+        // Check if wallet exists
+        const walletExists = localStorage.getItem('aiCoinWallet');
+        const currentUser = await window.websim.getCurrentUser();
+        
+        if (walletExists) {
+            // Show PIN login
+            pinSetup.classList.add('hidden');
+            pinLogin.classList.remove('hidden');
             
-            await room.collection('users').create({
-                userId: currentUser.id,
-                username: currentUser.username,
-                publicKey: publicKeyJSON,
-                isVerified: false,
-                lastClaim: null,
-            });
-
-            decryptedPrivateKey = privateKeyJSON;
-            pinModalOverlay.classList.add('hidden');
-            hideLoader();
-            main();
-        }
-    }
-    
-    // --- Initialisation ---
-    
-    async function init() {
-        currentUser = await window.websim.getCurrentUser();
-        await room.initialize();
-        
-        const storedData = localStorage.getItem('aic_user_data');
-
-        if (storedData) {
-            pinModalTitle.textContent = 'Enter Your PIN';
-            pinModalPrompt.textContent = 'Enter your 4-digit PIN to unlock your wallet.';
-            pinSubmitButton.textContent = 'Unlock';
-        } else {
-             pinModalTitle.textContent = 'Setup Your Secure PIN';
-             pinModalPrompt.textContent = 'Create a 4-digit PIN to secure your account. This PIN is not recoverable.';
-             pinSubmitButton.textContent = 'Set PIN and Create Account';
-        }
-        pinModalOverlay.classList.remove('hidden');
-        pinInput.focus();
-    }
-    
-    async function main() {
-        showLoader('Loading your data...');
-
-        room.subscribePresence((presence) => {
-            renderActiveUsers(presence);
-            room.updatePresence({ user: currentUser });
-        });
-        
-        room.collection('users').filter({ userId: currentUser.id }).subscribe(users => {
-            if (users.length > 0) {
-                userRecord = users[0];
+            // Check if user record exists in database
+            const userRecord = room.collection('user_keys').filter({ username: currentUser.username }).getList()[0];
+            if (userRecord) {
+                state.publicKey = userRecord.publicKey;
+                state.isVerified = userRecord.verified;
+                state.balance = userRecord.balance || 0;
                 updateUI();
             }
-        });
-
-        room.collection('transactions').filter({ userId: currentUser.id }).subscribe(txs => {
-            transactions = txs.reverse(); // newest first is default, reverse for chronological
-            updateUI();
-        });
-
-        verifyButton.addEventListener('click', handleVerification);
-        claimButton.addEventListener('click', handleClaim);
-        chatForm.addEventListener('submit', handleChat);
+        } else {
+            // Show wallet setup
+            pinSetup.classList.remove('hidden');
+            pinLogin.classList.add('hidden');
+        }
         
-        hideLoader();
+        // Subscribe to presence updates for active users
+        room.subscribePresence(() => {
+            renderActiveUsers();
+        });
+        
+        // Subscribe to user key updates
+        room.collection('user_keys').subscribe(() => {
+            renderActiveUsers();
+        });
     }
     
-    pinForm.addEventListener('submit', handlePinSubmit);
-    init();
+    // --- Event Listeners ---
+    
+    verifyButton.addEventListener('click', handleVerification);
+    claimButton.addEventListener('click', handleClaim);
+    chatForm.addEventListener('submit', handleChat);
+    setupWalletBtn.addEventListener('click', setupWallet);
+    unlockWalletBtn.addEventListener('click', unlockWallet);
+    
+    // Tab switching
+    tabButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            switchTab(button.dataset.tab);
+        });
+    });
+    
+    // PIN input validation
+    [pinInput, pinConfirm, loginPin].forEach(input => {
+        input.addEventListener('input', (e) => {
+            e.target.value = e.target.value.replace(/\D/g, '');
+        });
+    });
+    
+    // Initialize the app
+    await initializeApp();
 });
