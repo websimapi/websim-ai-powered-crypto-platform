@@ -24,7 +24,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const setupWalletBtn = document.getElementById('setup-wallet-btn');
     const pinSetup = document.getElementById('pin-setup');
     const pinLogin = document.getElementById('pin-login');
-    const loginPin = document.getElementById('login-pin');
     const unlockWalletBtn = document.getElementById('unlock-wallet-btn');
     
     // Tab elements
@@ -167,6 +166,34 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
         } catch (error) {
             throw new Error('Invalid PIN');
         }
+    }
+
+    async function signMessage(message, privateKeyHex) {
+        const privateKeyBuffer = hexToArrayBuffer(privateKeyHex);
+        const privateKey = await window.crypto.subtle.importKey(
+            "pkcs8",
+            privateKeyBuffer,
+            {
+                name: "ECDSA",
+                namedCurve: "P-256"
+            },
+            false,
+            ["sign"]
+        );
+        
+        const encoder = new TextEncoder();
+        const data = encoder.encode(message);
+        
+        const signature = await window.crypto.subtle.sign(
+            {
+                name: "ECDSA",
+                hash: { name: "SHA-256" }
+            },
+            privateKey,
+            data
+        );
+        
+        return arrayBufferToHex(signature);
     }
 
     // --- Core Functions ---
@@ -387,7 +414,7 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
     }
     
     // --- Event Handlers ---
-
+    
     async function handleVerification() {
         if (!state.isWalletUnlocked) {
             addChatMessage('ai', 'Please unlock your wallet first to proceed with verification.');
@@ -396,10 +423,40 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
         
         showLoader('AI is processing your verification request...');
         try {
+            // Get the encrypted private key and decrypt it
+            const encryptedData = JSON.parse(localStorage.getItem('aiCoinWallet'));
+            const pin = prompt('Please enter your PIN to sign the verification message:');
+            if (!pin) {
+                hideLoader();
+                return;
+            }
+            
+            const privateKeyHex = await decryptPrivateKey(encryptedData, pin);
+            
+            // Create verification message and sign it
+            const currentUser = await window.websim.getCurrentUser();
+            const timestamp = Date.now();
+            const verificationMessage = `VERIFICATION_REQUEST:${currentUser.username}:${state.publicKey}:${timestamp}`;
+            const signature = await signMessage(verificationMessage, privateKeyHex);
+            
+            // Get user's presence and connection info
+            const userPresence = room.presence[room.clientId] || {};
+            const connectionTime = Date.now() - (room.connectionStartTime || 0);
+            
             const completion = await websim.chat.completions.create({
                 messages: [{
                     role: "user",
-                    content: `A user with public key ${state.publicKey} has requested verification. Please process this request and respond ONLY with JSON matching this schema: {"approved": boolean, "reason": string}`,
+                    content: `A user is requesting verification with the following details:
+Username: ${currentUser.username}
+Public Key: ${state.publicKey}
+Verification Message: ${verificationMessage}
+Cryptographic Signature: ${signature}
+Connection Duration: ${Math.round(connectionTime / 1000)} seconds
+User Avatar: ${currentUser.avatarUrl}
+
+This user has provided cryptographic proof of private key ownership by signing a verification message. The signature can be verified against their public key. They are currently connected to the realtime network and have been online for the specified duration.
+
+Please process this verification request and respond ONLY with JSON matching this schema: {"approved": boolean, "reason": string}`,
                 }],
                 json: true,
             });
@@ -409,10 +466,13 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
                 state.isVerified = true;
                 
                 // Update user record in database
-                const currentUser = await window.websim.getCurrentUser();
                 const userRecord = room.collection('user_keys').filter({ username: currentUser.username }).getList()[0];
                 if (userRecord) {
-                    await room.collection('user_keys').update(userRecord.id, { verified: true });
+                    await room.collection('user_keys').update(userRecord.id, { 
+                        verified: true,
+                        verificationTimestamp: timestamp,
+                        verificationSignature: signature
+                    });
                 }
                 
                 addChatMessage('ai', `Verification successful! Reason: "${result.reason}". You can now claim your daily tokens.`);
@@ -424,7 +484,11 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
 
         } catch (error) {
             console.error('Verification error:', error);
-            addChatMessage('error', 'There was an error during verification. Please try again.');
+            if (error.message === 'Invalid PIN') {
+                addChatMessage('error', 'Invalid PIN provided. Verification cancelled.');
+            } else {
+                addChatMessage('error', 'There was an error during verification. Please try again.');
+            }
         } finally {
             hideLoader();
             updateUI();
@@ -531,6 +595,9 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
         // Load saved state
         loadState();
         
+        // Store connection start time for presence tracking
+        room.connectionStartTime = Date.now();
+        
         // Check if wallet exists
         const walletExists = localStorage.getItem('aiCoinWallet');
         const currentUser = await window.websim.getCurrentUser();
@@ -553,6 +620,14 @@ Remember, this is a simulation. Do not give financial advice. Keep your general 
             pinSetup.classList.remove('hidden');
             pinLogin.classList.add('hidden');
         }
+        
+        // Update presence with user status
+        room.updatePresence({
+            status: 'online',
+            walletSetup: !!walletExists,
+            verified: state.isVerified,
+            lastActivity: Date.now()
+        });
         
         // Subscribe to presence updates for active users
         room.subscribePresence(() => {
