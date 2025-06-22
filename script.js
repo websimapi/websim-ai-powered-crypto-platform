@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const setupWalletBtn = document.getElementById('setup-wallet-btn');
     const pinSetup = document.getElementById('pin-setup');
     const pinLogin = document.getElementById('pin-login');
+    const loginPin = document.getElementById('login-pin');
     const unlockWalletBtn = document.getElementById('unlock-wallet-btn');
     
     // Tab elements
